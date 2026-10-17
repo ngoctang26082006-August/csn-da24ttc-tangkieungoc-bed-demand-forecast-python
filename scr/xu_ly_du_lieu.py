@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-Loc va lam sach du lieu cho de tai:
-"Phan tich nhu cau su dung giuong benh va du bao luong benh nhan nhap vien khan cap"
+LOC, LAM SACH, DICH SANG TIENG VIET VA TAO BO DU LIEU MO HINH (GOP 1 FILE)
+De tai: "Phan tich nhu cau su dung giuong benh va du bao luong benh nhan nhap vien khan cap"
 
 Cach dung:
-  1. Dat 3 file CSV vao thu muc setup/ cua repo, doi ten thanh:
+  1. Cai thu vien:  pip install pandas numpy holidays
+  2. Dat 3 file CSV vao thu muc setup/ cua repo, doi ten thanh:
        patients.csv        (ho so benh nhan)
        bed_occupancy.csv   (ty le lap day giuong benh)
        ae_2010_2020.csv    (so lieu cap cuu/nhap vien 2010-2020)
-  2. Chay tu thu muc goc cua repo:  python scr/loc_du_lieu.py
+  3. Chay tu thu muc goc cua repo:  python scr/xu_ly_du_lieu.py
      (hoac mo bang VS Code va bam "Run Cell" o tung o "# %%")
-  3. Ket qua luu o setup/: patients_clean.csv, bed_occupancy_clean.csv,
-     ae_clean.csv, ae_monthly.csv, ae_benhvien.csv
-     daily_patients.csv
-     (daily_patients.csv = chuoi THEO NGAY: nhap vien + so giuong dang dung,
-      tu file patients -> file chinh de huan luyen mo hinh du bao;
-      ae_benhvien.csv = chuoi theo thang cua 1 benh vien, dung doi chieu;
-      doi benh vien o muc 4, bien BENH_VIEN)
+
+Cac buoc:
+  Muc 1-5  : loc va lam sach du lieu (file *_clean.csv, ae_monthly.csv, ae_benhvien.csv, daily_patients.csv)
+  Muc 6-9  : dich sang tieng Viet (file *_vi.csv), them yeu to ngay le/cuoi tuan/mua, thong ke nhanh
+  Muc 10   : tao bo du lieu cho mo hinh (setup/du_lieu_mo_hinh.csv) - FILE CHINH de huan luyen
+             ARIMA / Prophet / Random Forest / XGBoost
 """
 
 # %% 0. Thu vien va duong dan
@@ -289,8 +289,177 @@ print(f"5.4 Chuoi theo ngay: {len(ngay)} ngay, {int(ngay['warm_up'].sum())} ngay
 print(ngay[~ngay["warm_up"]][["admissions", "occupied_beds"]].describe().round(1))
 
 
-# %% 6. Tong ket
+# %% 6.0 Ham phu tro cho phan dich
+def doc(ten_file, **kw):
+    return pd.read_csv(DATA_DIR / ten_file, **kw)
+
+
+def doi_ten_cot(df, tu_dien):
+    """Chi doi ten cac cot co trong du lieu, cot khac giu nguyen."""
+    return df.rename(columns={k: v for k, v in tu_dien.items() if k in df.columns})
+
+
+def luu(df, ten_file):
+    df.to_csv(DATA_DIR / ten_file, index=False, encoding="utf-8-sig")
+    print(f"  -> {ten_file}: {len(df)} dong, {df.shape[1]} cot")
+
+
+# %% 6. Tu dien dich
+THU = {0: "Thứ Hai", 1: "Thứ Ba", 2: "Thứ Tư", 3: "Thứ Năm", 4: "Thứ Sáu", 5: "Thứ Bảy", 6: "Chủ Nhật"}
+
+KHOA = {
+    "emergency": "Cấp cứu",
+    "ICU": "Hồi sức tích cực",
+    "surgery": "Phẫu thuật",
+    "general_medicine": "Nội tổng quát",
+}
+
+COT_BENH_NHAN = {
+    "patient_id": "Mã bệnh nhân", "name": "Họ tên", "age": "Tuổi",
+    "arrival_date": "Ngày nhập viện", "departure_date": "Ngày xuất viện",
+    "service": "Khoa", "satisfaction": "Điểm hài lòng", "length_of_stay": "Số ngày nằm viện",
+}
+
+COT_GIUONG = {
+    "Date": "Ngày", "Occupancy": "Số giường đang dùng", "Day_of_Week": "Thứ trong tuần",
+    "Month": "Tháng", "Year": "Năm", "Holiday": "Ngày lễ",
+    "Prev_Occupancy": "Số giường dùng hôm trước", "Prev_2_Occupancy": "Số giường dùng 2 ngày trước",
+}
+
+COT_CAP_CUU = {
+    "date": "Ngày", "Name": "Tên cơ sở y tế", "year": "Năm", "quarter": "Quý", "month": "Tháng",
+    "lat": "Vĩ độ", "lon": "Kinh độ",
+    "Total attendances": "Tổng lượt khám cấp cứu",
+    "emergency_admissions": "Nhập viện khẩn cấp",
+    "attendances": "Tổng lượt khám cấp cứu",
+    "n_org": "Số cơ sở báo cáo",
+    "is_outlier": "Tháng bất thường",
+    "Type 1 Departments - Major A&E": "Khoa cấp cứu lớn (Loại 1)",
+    "Percentage in 4 hours or less (all)": "Tỷ lệ xử lý trong 4 giờ",
+    "Emergency Admissions via Type 1 A&E in 4 hours": "Nhập viện qua cấp cứu Loại 1",
+    "Emergency Admissions via Type 2 A&E in 4 hours": "Nhập viện qua cấp cứu Loại 2",
+    "Emergency Admissions via Type 3 and 4 A&E in 4 hours": "Nhập viện qua cấp cứu Loại 3 và 4",
+    "Other Emergency admissions (i.e not via A&E)": "Nhập viện khẩn cấp ngoài cấp cứu",
+}
+
+COT_NGAY = {
+    "date": "Ngày", "admissions": "Số ca nhập viện", "discharges": "Số ca xuất viện",
+    "occupied_beds": "Số giường đang dùng", "warm_up": "Giai đoạn khởi động",
+    "day_of_week": "Thứ trong tuần (0=Hai)", "month": "Tháng",
+    "is_weekend": "Cuối tuần", "is_holiday": "Ngày lễ",
+}
+for k, v in KHOA.items():
+    COT_NGAY[f"admissions_{k}"] = f"Nhập viện - {v}"
+
+
+# %% 7. Dich tung file da lam sach
+print("7. Dich cac file sang tieng Viet")
+
+# 2.1 Ho so benh nhan (them nhom tuoi de phan tich theo loai benh nhan)
+bn = doc("patients_clean.csv", parse_dates=["arrival_date", "departure_date"])
+bn["service"] = bn["service"].map(KHOA).fillna(bn["service"])
+bn["nhom_tuoi"] = pd.cut(bn["age"], [-1, 17, 59, 120], labels=["Trẻ em (0-17)", "Người lớn (18-59)", "Cao tuổi (60+)"])
+bn = bn.sort_values(["arrival_date", "patient_id"]).reset_index(drop=True)
+luu(doi_ten_cot(bn, {**COT_BENH_NHAN, "nhom_tuoi": "Nhóm tuổi"}), "patients_vi.csv")
+
+# 2.2 Ty le lap day giuong
+gb = doc("bed_occupancy_clean.csv", parse_dates=["Date"]).sort_values("Date")
+gb["Day_of_Week"] = gb["Date"].dt.dayofweek.map(THU)
+luu(doi_ten_cot(gb, COT_GIUONG), "bed_occupancy_vi.csv")
+
+# 2.3 Cap cuu / nhap vien (ca nuoc, theo co so)
+ae = doc("ae_clean.csv", parse_dates=["date"]).sort_values(["Name", "date"])
+luu(doi_ten_cot(ae, COT_CAP_CUU), "ae_vi.csv")
+
+# 2.4 Chuoi theo thang
+thang = doc("ae_monthly.csv", parse_dates=["date"]).sort_values("date")
+luu(doi_ten_cot(thang, COT_CAP_CUU), "ae_monthly_vi.csv")
+
+# 2.5 Chuoi theo thang cua 1 benh vien
+bv = doc("ae_benhvien.csv", parse_dates=["date"]).sort_values("date")
+luu(doi_ten_cot(bv, COT_CAP_CUU), "ae_benhvien_vi.csv")
+
+
+# %% 8. Chuoi theo ngay: them yeu to tac dong (ngay le, cuoi tuan, mua)
+print("8. Chuoi theo ngay")
+ng = doc("daily_patients.csv", parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+
+# 3.1 Ngay lien ke ngay le: nguoi dan thuong nhap vien nhieu sau/ truoc ky nghi dai
+ng["truoc_le"] = ng["is_holiday"].shift(-1).fillna(0).astype(int)
+ng["sau_le"] = ng["is_holiday"].shift(1).fillna(0).astype(int)
+
+# 3.2 Mua (Viet Nam: mua mua 5-10, mua kho 11-4) va quy
+ng["mua"] = np.where(ng["month"].between(5, 10), "Mùa mưa", "Mùa khô")
+ng["quy"] = ng["date"].dt.quarter
+ng["ten_thu"] = ng["day_of_week"].map(THU)
+
+# 3.3 Sap xep cot theo nhom: thoi gian -> muc tieu -> theo khoa -> yeu to tac dong
+cot_khoa = [c for c in ng.columns if c.startswith("admissions_")]
+thu_tu = (["date", "ten_thu", "day_of_week", "month", "quy", "mua", "warm_up",
+           "admissions", "discharges", "occupied_beds"] + cot_khoa
+          + ["is_weekend", "is_holiday", "truoc_le", "sau_le"])
+ng = ng[thu_tu]
+
+ten_moi = {**COT_NGAY, "ten_thu": "Tên thứ", "quy": "Quý", "mua": "Mùa",
+           "truoc_le": "Trước ngày lễ", "sau_le": "Sau ngày lễ"}
+luu(doi_ten_cot(ng, ten_moi), "daily_patients_vi.csv")
+
+
+# %% 9. Phan tich nhanh cac yeu to tac dong (de dua vao bao cao)
+print("9. Yeu to tac dong den so ca nhap vien (bo giai doan khoi dong)")
+hop_le = ng[~ng["warm_up"]]
+print("\n4.1 Trung binh nhap vien theo thu:")
+print(hop_le.groupby("ten_thu")["admissions"].mean().reindex(list(THU.values())).round(2).to_string())
+print("\n4.2 Ngay le / ngay thuong:")
+print(hop_le.groupby("is_holiday")["admissions"].agg(["mean", "count"]).round(2).rename(index={0: "Ngày thường", 1: "Ngày lễ"}).to_string())
+print("\n4.3 Theo thang:")
+print(hop_le.groupby("month")[["admissions", "occupied_beds"]].mean().round(2).to_string())
+
+
+# %% 10. Bo du lieu cho mo hinh du bao
+# Muc tieu: du bao "so giuong dang dung" (nhu cau giuong) va "so ca nhap vien".
+# Dac trung tre (lag) chi dung gia tri cua cac ngay TRUOC de tranh ro ri thong tin.
+print("10. Tao bo du lieu cho mo hinh")
+
+# So giuong toi da cua benh vien: file patients khong co thong tin nay.
+# DOI con so nay neu biet so giuong thuc te. Neu de None se uoc luong = 1.1 x gia tri lon nhat.
+TONG_GIUONG = None
+SO_NGAY_KIEM_TRA = 60  # 60 ngay cuoi dung de kiem tra mo hinh (RMSE, MAE)
+
+md = ng[~ng["warm_up"]].copy().reset_index(drop=True)
+
+if TONG_GIUONG is None:
+    TONG_GIUONG = int(np.ceil(md["occupied_beds"].max() * 1.1))
+    print(f"  Chua dat TONG_GIUONG -> tam uoc luong {TONG_GIUONG} giuong (nen thay bang so thuc te)")
+md["tong_giuong"] = TONG_GIUONG
+md["giuong_trong"] = (TONG_GIUONG - md["occupied_beds"]).clip(lower=0)
+md["ty_le_lap_day"] = (md["occupied_beds"] / TONG_GIUONG).clip(0, 1).round(4)
+
+for k in [1, 2, 7, 14]:
+    md[f"giuong_tre_{k}"] = md["occupied_beds"].shift(k)
+    md[f"nhap_vien_tre_{k}"] = md["admissions"].shift(k)
+md["nhap_vien_tb7"] = md["admissions"].shift(1).rolling(7).mean()
+md["giuong_tb7"] = md["occupied_beds"].shift(1).rolling(7).mean()
+
+md = md.dropna().reset_index(drop=True)
+md["tap"] = np.where(md.index >= len(md) - SO_NGAY_KIEM_TRA, "kiểm tra", "huấn luyện")
+
+ten_md = {**ten_moi,
+          "tong_giuong": "Tổng số giường", "giuong_trong": "Số giường trống",
+          "ty_le_lap_day": "Tỷ lệ lấp đầy giường", "nhap_vien_tb7": "Nhập viện TB 7 ngày trước",
+          "giuong_tb7": "Giường dùng TB 7 ngày trước", "tap": "Tập dữ liệu"}
+for k in [1, 2, 7, 14]:
+    ten_md[f"giuong_tre_{k}"] = f"Giường dùng trước {k} ngày"
+    ten_md[f"nhap_vien_tre_{k}"] = f"Nhập viện trước {k} ngày"
+luu(doi_ten_cot(md, ten_md), "du_lieu_mo_hinh.csv")
+
+print(f"  Huan luyen: {(md['tap'] == 'huấn luyện').sum()} ngay | Kiem tra: {(md['tap'] == 'kiểm tra').sum()} ngay")
+print("\nXong. File chinh de huan luyen mo hinh: setup/du_lieu_mo_hinh.csv")
+
+
+# %% 11. Tong ket
 print("\nDa luu cac file vao", DATA_DIR)
-for ten in ["patients_clean", "bed_occupancy_clean", "ae_clean", "ae_monthly",
-            "ae_benhvien", "daily_patients"]:
+for ten in ["patients_clean", "bed_occupancy_clean", "ae_clean", "ae_monthly", "ae_benhvien", "daily_patients",
+            "patients_vi", "bed_occupancy_vi", "ae_vi", "ae_monthly_vi", "ae_benhvien_vi",
+            "daily_patients_vi", "du_lieu_mo_hinh"]:
     print(" -", ten + ".csv")
